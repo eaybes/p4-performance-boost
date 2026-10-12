@@ -18,6 +18,31 @@ class P4PB_Admin {
 		add_action( 'admin_init', [ $this, 'register_settings' ] );
 	}
 
+	public static function defaults() {
+		return [
+			'enable_preconnect'   => 1,
+			'enable_lcp'          => 1,
+			'enable_script_delay' => 0,
+			'delay_fallback_ms'   => 3000,
+			'preconnect_origins'  => "https://fonts.googleapis.com\nhttps://fonts.gstatic.com\nhttps://www.googletagmanager.com\nhttps://connect.facebook.net",
+			'delay_scripts'       => "hotjar\ntiktok",
+			'allow_scripts'       => "googletagmanager\noptimk\noptimonk",
+		];
+	}
+
+	/** Saved options merged over the defaults (same values the settings page shows). */
+	public static function get_options() {
+		$saved = get_option( 'p4pb_options', [] );
+		if ( ! is_array( $saved ) ) {
+			$saved = [];
+		}
+		// 1.0.x stored the timeout as gtm_delay_ms.
+		if ( ! isset( $saved['delay_fallback_ms'] ) && isset( $saved['gtm_delay_ms'] ) ) {
+			$saved['delay_fallback_ms'] = $saved['gtm_delay_ms'];
+		}
+		return wp_parse_args( $saved, self::defaults() );
+	}
+
 	public function add_menu() {
 		add_options_page(
 			'Performance Boost',
@@ -41,35 +66,21 @@ class P4PB_Admin {
 			'enable_preconnect',
 			'enable_lcp',
 			'enable_script_delay',
-			'delay_gtm',
 		];
 		foreach ( $checkboxes as $key ) {
 			$output[ $key ] = ! empty( $input[ $key ] ) ? 1 : 0;
 		}
 
-		$output['gtm_delay_ms']       = isset( $input['gtm_delay_ms'] ) ? absint( $input['gtm_delay_ms'] ) : 3000;
+		$output['delay_fallback_ms']  = isset( $input['delay_fallback_ms'] ) ? min( 10000, absint( $input['delay_fallback_ms'] ) ) : 3000;
 		$output['delay_scripts']      = sanitize_textarea_field( $input['delay_scripts'] ?? '' );
 		$output['allow_scripts']      = sanitize_textarea_field( $input['allow_scripts'] ?? '' );
 		$output['preconnect_origins'] = sanitize_textarea_field( $input['preconnect_origins'] ?? '' );
-		$output['lcp_selector']       = sanitize_text_field( $input['lcp_selector'] ?? '' );
 
 		return $output;
 	}
 
 	public function render_page() {
-		$options = get_option( 'p4pb_options', [] );
-		$defaults = [
-			'enable_preconnect'  => 1,
-			'enable_lcp'         => 1,
-			'enable_script_delay' => 0,
-			'delay_gtm'          => 0,
-			'gtm_delay_ms'       => 3000,
-			'lcp_selector'       => '.page-header-image img, .carousel-item.active img, article img:first-of-type',
-			'preconnect_origins' => "https://fonts.googleapis.com\nhttps://fonts.gstatic.com\nhttps://www.googletagmanager.com\nhttps://connect.facebook.net",
-			'delay_scripts'      => "hotjar\noptimizely\nhs-scripts\ntiktok",
-			'allow_scripts'      => "googletagmanager\noptimk\noptimonk",
-		];
-		$options = wp_parse_args( $options, $defaults );
+		$options = self::get_options();
 		?>
 		<div class="wrap">
 			<h1>⚡ Planet4 Performance Boost</h1>
@@ -115,16 +126,9 @@ class P4PB_Admin {
 						<td>
 							<label>
 								<input type="checkbox" name="p4pb_options[enable_lcp]" value="1" <?php checked( $options['enable_lcp'] ); ?>>
-								Add <code>fetchpriority="high"</code> to the LCP hero image
+								Add <code>fetchpriority="high"</code> to the first content image (LCP hero)
 							</label>
-							<p class="description">PageSpeed identified this as missing. Tells the browser to prioritize loading the hero image.</p>
-						</td>
-					</tr>
-					<tr>
-						<th>CSS Selector</th>
-						<td>
-							<input type="text" name="p4pb_options[lcp_selector]" value="<?php echo esc_attr( $options['lcp_selector'] ); ?>" class="large-text">
-							<p class="description">CSS selector for the hero/LCP image. The first match gets <code>fetchpriority="high"</code> and <code>loading="eager"</code>.</p>
+							<p class="description">Tells the browser to load the hero image first. The first non-icon image on the page is used; the page HTML is never re-parsed.</p>
 						</td>
 					</tr>
 
@@ -139,9 +143,9 @@ class P4PB_Admin {
 						<td>
 							<label>
 								<input type="checkbox" name="p4pb_options[enable_script_delay]" value="1" <?php checked( $options['enable_script_delay'] ); ?>>
-								Delay non-critical 3rd-party scripts until user interaction
+								Delay non-critical 3rd-party scripts until user interaction (Google Tag Manager is never touched)
 							</label>
-							<p class="description">Scripts matching the patterns below will load on first user interaction (scroll, click, mousemove) or after the fallback timeout.</p>
+							<p class="description">Applies to scripts that are added by JavaScript (Hotjar, TikTok, Facebook and similar). Scripts matching the patterns below load on first user interaction or after the fallback timeout. Add <code>?p4pb=off</code> to a URL to bypass the plugin when debugging.</p>
 						</td>
 					</tr>
 					<tr>
@@ -157,31 +161,16 @@ class P4PB_Admin {
 							<textarea name="p4pb_options[allow_scripts]" rows="6" class="large-text"><?php echo esc_textarea( $options['allow_scripts'] ); ?></textarea>
 							<p class="description">
 								One pattern per line. Scripts matching these patterns will <strong>always load immediately</strong>, even if they also match a delay pattern.<br>
-								<strong>GTM and OptiMonk are whitelisted by default.</strong>
+								<strong>GTM, Google Analytics and OptiMonk are always whitelisted (hardcoded).</strong>
 							</p>
 						</td>
 					</tr>
 
-					<!-- GTM DELAY -->
 					<tr>
-						<th>Delay Google Tag Manager</th>
+						<th>Fallback timeout (ms)</th>
 						<td>
-							<label>
-								<input type="checkbox" name="p4pb_options[delay_gtm]" value="1" <?php checked( $options['delay_gtm'] ); ?>>
-								Load GTM after user interaction (saves ~1,461ms main thread time)
-							</label>
-							<p class="description">
-								<strong>⚠️ Test carefully before enabling on production.</strong><br>
-								<code>window.dataLayer</code> is initialized immediately, so manual dataLayer pushes still work.
-								GTM loads on first user interaction or after the timeout below.
-							</p>
-						</td>
-					</tr>
-					<tr>
-						<th>GTM fallback timeout (ms)</th>
-						<td>
-							<input type="number" name="p4pb_options[gtm_delay_ms]" value="<?php echo esc_attr( $options['gtm_delay_ms'] ); ?>" min="0" max="10000" step="500" style="width:100px;">
-							<p class="description">If no user interaction occurs, GTM loads after this many milliseconds. Default: 3000ms.</p>
+							<input type="number" name="p4pb_options[delay_fallback_ms]" value="<?php echo esc_attr( $options['delay_fallback_ms'] ); ?>" min="0" max="10000" step="500" style="width:100px;">
+							<p class="description">If the visitor does not interact, delayed scripts load after this many milliseconds. Default: 3000ms.</p>
 						</td>
 					</tr>
 

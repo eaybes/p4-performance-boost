@@ -18,9 +18,8 @@ class P4PB_Preconnect {
 	}
 
 	public function output_hints() {
-		$options = get_option( 'p4pb_options', [] );
-		$raw     = $options['preconnect_origins'] ?? '';
-		$origins = array_filter( array_map( 'trim', explode( "\n", $raw ) ) );
+		$options = P4PB_Admin::get_options();
+		$origins = array_unique( array_filter( array_map( 'trim', explode( "\n", $options['preconnect_origins'] ) ) ) );
 
 		foreach ( $origins as $origin ) {
 			$origin = esc_url( $origin );
